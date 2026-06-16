@@ -336,6 +336,7 @@ export async function startOrResumeThread(params: {
     }),
   );
   const webSearchThreadConfigFingerprint = fingerprintJsonObject(webSearchPlan.threadConfig);
+  const networkProxyConfigFingerprint = params.appServer.networkProxy?.configFingerprint;
   const contextEngineBinding = lifecycleTiming.measureSync("context-engine-binding", () =>
     buildContextEngineBinding(params.params, params.contextEngineProjection),
   );
@@ -479,6 +480,17 @@ export async function startOrResumeThread(params: {
         threadId: binding.threadId,
       },
     );
+    await clearCodexAppServerBinding(params.params.sessionFile);
+    binding = undefined;
+  }
+  if (
+    binding?.threadId &&
+    (binding.networkProxyConfigFingerprint !== networkProxyConfigFingerprint ||
+      binding.networkProxyProfileName !== params.appServer.networkProxy?.profileName)
+  ) {
+    embeddedAgentLog.debug("codex app-server network proxy config changed; starting a new thread", {
+      threadId: binding.threadId,
+    });
     await clearCodexAppServerBinding(params.params.sessionFile);
     binding = undefined;
   }
@@ -648,6 +660,7 @@ export async function startOrResumeThread(params: {
               userMcpServersFingerprint,
               mcpServersFingerprint: nextMcpServersFingerprint,
               networkProxyProfileName: params.appServer.networkProxy?.profileName,
+              networkProxyConfigFingerprint,
               nativeHookRelayGeneration:
                 finalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration,
               pluginAppsFingerprint: binding.pluginAppsFingerprint,
@@ -697,6 +710,7 @@ export async function startOrResumeThread(params: {
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
           networkProxyProfileName: params.appServer.networkProxy?.profileName,
+          networkProxyConfigFingerprint,
           nativeHookRelayGeneration:
             finalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration,
           pluginAppsFingerprint: binding.pluginAppsFingerprint,
@@ -798,6 +812,7 @@ export async function startOrResumeThread(params: {
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
           networkProxyProfileName: params.appServer.networkProxy?.profileName,
+          networkProxyConfigFingerprint,
           nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
           pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
           pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
@@ -847,6 +862,7 @@ export async function startOrResumeThread(params: {
     userMcpServersFingerprint,
     mcpServersFingerprint: nextMcpServersFingerprint,
     networkProxyProfileName: params.appServer.networkProxy?.profileName,
+    networkProxyConfigFingerprint,
     nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
     pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
     pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
