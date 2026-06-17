@@ -886,6 +886,44 @@ describe("runBtwSideQuestion", () => {
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
 
+  it("routes standalone CLI backend models without registry resolution", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "Acme CLI side answer." });
+    resolveModelWithRegistryMock.mockImplementation(() => {
+      throw new Error("standalone CLI model must not resolve through the registry");
+    });
+
+    const result = await runSideQuestion({
+      cfg: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "acme-cli": { command: "acme" },
+            },
+          },
+        },
+      } as never,
+      provider: "acme-cli",
+      model: "acme-large",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "Acme CLI side answer." });
+    expect(prepareCliRunContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "acme-cli",
+        model: "acme-large",
+        executionMode: "side-question",
+      }),
+    );
+    expect(resolveModelWithRegistryMock).not.toHaveBeenCalled();
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves the explicit no-timeout override for CLI-runtime BTW", async () => {
     const cleanup = vi.fn(async () => undefined);
     prepareCliRunContextMock.mockResolvedValueOnce({

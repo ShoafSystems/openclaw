@@ -50,6 +50,7 @@ import {
   isCliRuntimeAliasForProvider,
   resolveCliRuntimeExecutionProvider,
 } from "./model-runtime-aliases.js";
+import { isCliProvider } from "./model-selection-cli.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-routing.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
@@ -479,13 +480,49 @@ export async function runBtwSideQuestion(
     config: params.cfg,
   });
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
-  const harness = selectAgentHarness({
+  const fallbackPolicy = resolveAvailableAgentHarnessPolicy({
     provider: params.provider,
     modelId: params.model,
     config: params.cfg,
     agentId: sessionAgentId,
     sessionKey: params.sessionKey,
   });
+  const fallbackRuntime = fallbackPolicy.runtime.trim();
+  const sessionAuthProfileId = params.sessionEntry.authProfileOverride?.trim() || undefined;
+  const sessionAuthProfileSource = resolveReturnedAuthProfileSource(
+    params.sessionEntry,
+    sessionAuthProfileId,
+  );
+  const cliProviderFromSessionAuth = sessionAuthProfileId
+    ? resolveCliRuntimeExecutionProvider({
+        provider: params.provider,
+        cfg: params.cfg,
+        agentId: sessionAgentId,
+        modelId: params.model,
+        authProfileId: sessionAuthProfileId,
+      })?.trim()
+    : undefined;
+  const cliProviderFromAuthOrder =
+    !sessionAuthProfileId || sessionAuthProfileSource === "auto"
+      ? resolveCliRuntimeExecutionProvider({
+          provider: params.provider,
+          cfg: params.cfg,
+          agentId: sessionAgentId,
+          modelId: params.model,
+        })?.trim()
+      : undefined;
+  const resolvedCliProvider = cliProviderFromSessionAuth ?? cliProviderFromAuthOrder;
+  const cliProvider =
+    resolvedCliProvider ??
+    (isCliProvider(params.provider, params.cfg)
+      ? params.provider
+      : isCliRuntimeAliasForProvider({
+            runtime: fallbackRuntime,
+            provider: params.provider,
+            cfg: params.cfg,
+          })
+        ? fallbackRuntime
+        : undefined);
   let runtimeSelection: Awaited<ReturnType<typeof resolveRuntimeModel>> | undefined;
   const resolveRuntimeSelection = async () => {
     if (!runtimeSelection) {
@@ -548,11 +585,22 @@ export async function runBtwSideQuestion(
     });
     return { text: result.text };
   };
-  if (harness.runSideQuestion) {
-    return runHarnessSideQuestion(harness, await resolveRuntimeSelection());
-  }
-  if (harness.id === "codex") {
-    throw new Error(`Selected agent harness "${harness.id}" does not support /btw side questions.`);
+  if (!cliProvider) {
+    const harness = selectAgentHarness({
+      provider: params.provider,
+      modelId: params.model,
+      config: params.cfg,
+      agentId: sessionAgentId,
+      sessionKey: params.sessionKey,
+    });
+    if (harness.runSideQuestion) {
+      return runHarnessSideQuestion(harness, await resolveRuntimeSelection());
+    }
+    if (harness.id === "codex") {
+      throw new Error(
+        `Selected agent harness "${harness.id}" does not support /btw side questions.`,
+      );
+    }
   }
 
   const activeRunSnapshot = getActiveEmbeddedRunSnapshot(sessionId);
@@ -582,64 +630,6 @@ export async function runBtwSideQuestion(
     throw new Error("No active session context.");
   }
 
-  const runtimeSelectionForHarness = await resolveRuntimeSelection();
-  const runtimeHarness = selectAgentHarness({
-    provider: runtimeSelectionForHarness.model.provider,
-    modelId: runtimeSelectionForHarness.model.id,
-    config: params.cfg,
-    agentId: sessionAgentId,
-    sessionKey: params.sessionKey,
-  });
-  if (runtimeHarness.runSideQuestion) {
-    return runHarnessSideQuestion(runtimeHarness, runtimeSelectionForHarness);
-  }
-  if (runtimeHarness.id === "codex") {
-    throw new Error(
-      `Selected agent harness "${runtimeHarness.id}" does not support /btw side questions.`,
-    );
-  }
-
-  const fallbackPolicy = resolveAvailableAgentHarnessPolicy({
-    provider: params.provider,
-    modelId: params.model,
-    config: params.cfg,
-    agentId: sessionAgentId,
-    sessionKey: params.sessionKey,
-  });
-  const fallbackRuntime = fallbackPolicy.runtime.trim();
-  const sessionAuthProfileId = params.sessionEntry.authProfileOverride?.trim() || undefined;
-  const sessionAuthProfileSource = resolveReturnedAuthProfileSource(
-    params.sessionEntry,
-    sessionAuthProfileId,
-  );
-  const cliProviderFromSessionAuth = sessionAuthProfileId
-    ? resolveCliRuntimeExecutionProvider({
-        provider: params.provider,
-        cfg: params.cfg,
-        agentId: sessionAgentId,
-        modelId: params.model,
-        authProfileId: sessionAuthProfileId,
-      })?.trim()
-    : undefined;
-  const cliProviderFromAuthOrder =
-    !sessionAuthProfileId || sessionAuthProfileSource === "auto"
-      ? resolveCliRuntimeExecutionProvider({
-          provider: params.provider,
-          cfg: params.cfg,
-          agentId: sessionAgentId,
-          modelId: params.model,
-        })?.trim()
-      : undefined;
-  const resolvedCliProvider = cliProviderFromSessionAuth ?? cliProviderFromAuthOrder;
-  const cliProvider =
-    resolvedCliProvider ??
-    (isCliRuntimeAliasForProvider({
-      runtime: fallbackRuntime,
-      provider: params.provider,
-      cfg: params.cfg,
-    })
-      ? fallbackRuntime
-      : undefined);
   if (cliProvider) {
     return runCliBtwSideQuestion({
       cfg: params.cfg,
@@ -661,6 +651,23 @@ export async function runBtwSideQuestion(
       messageProvider: params.messageProvider,
       currentChannelId: params.currentChannelId,
     });
+  }
+
+  const runtimeSelectionForHarness = await resolveRuntimeSelection();
+  const runtimeHarness = selectAgentHarness({
+    provider: runtimeSelectionForHarness.model.provider,
+    modelId: runtimeSelectionForHarness.model.id,
+    config: params.cfg,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+  });
+  if (runtimeHarness.runSideQuestion) {
+    return runHarnessSideQuestion(runtimeHarness, runtimeSelectionForHarness);
+  }
+  if (runtimeHarness.id === "codex") {
+    throw new Error(
+      `Selected agent harness "${runtimeHarness.id}" does not support /btw side questions.`,
+    );
   }
 
   const { model, authProfileId, authProfileIdSource } = runtimeSelectionForHarness;
